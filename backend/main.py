@@ -1,4 +1,4 @@
-"""
+﻿"""
 IntelliCredit Backend — Phase 1: Data Ingestion & Analysis
 Run with: uvicorn main:app --reload --port 8000
 """
@@ -541,7 +541,7 @@ async def full_pipeline(
                 bank_out = parse_bank_excel(tmp_path)
             else:
                 bank_out = parse_bank_pdf(tmp_path)
-            cross_bank = cross_check_gst_vs_bank(gst_data_out, bank_out) if gst_data_out else {}
+            cross_bank = cross_check_gst_vs_bank(gst_turnover_val, bank_out.get("total_credits_crore", 0)) if gst_turnover_val else {}
             SESSION["bank"]           = bank_out
             SESSION["cross_check_bank"] = cross_bank
             bank_credits_val        = bank_out.get("total_credits_crore", 0)
@@ -594,32 +594,50 @@ async def full_pipeline(
     bank_credits_final   = _pick(bank_credits_val, 0)
 
     # ── STEP 4: Compute Five C's Score ────────────────────────────────────────
-    score_input = {
-        "cibil_score":             cibil_score,
-        "litigation_count":        research_out.get("results",{}).get("litigation",{}).get("case_count", 0),
-        "gst_compliance_pct":      gst_compliance_final,
-        "dscr":                    dscr,
-        "revenue_growth_pct":      revenue_growth_pct,
-        "working_capital_days":    working_capital_days,
-        "debt_equity_ratio":       debt_equity_ratio,
-        "current_ratio":           current_ratio,
-        "net_worth_crore":         net_worth_crore,
-        "collateral_coverage_ratio":collateral_coverage_ratio,
-        "collateral_type":         "property",
-        "title_clear":             True,
-        "requested_amount_crore":  requested_amount_crore,
-        "net_profit_margin_pct":   net_profit_margin_pct,
-        "sector_outlook":          sector_outlook,
-        "news_sentiment":          research_out.get("news_sentiment", news_sentiment),
-        "rbi_regulatory_flags":    research_out.get("results",{}).get("rbi_circulars",{}).get("count", 0),
-        "officer_notes": {
-            "capacity_utilization_pct": capacity_utilization_pct,
-            "management_quality":       management_quality,
-            "site_visit_positive":      site_visit_positive,
-        },
+    character_data = {
+        "cibil_score":        cibil_score,
+        "litigation_count":   research_out.get("results",{}).get("litigation",{}).get("case_count", 0),
+        "gst_compliance_pct": gst_compliance_final,
+    }
+    capacity_data = {
+        "net_profit_margin_pct": net_profit_margin_pct,
+        "dscr":                  dscr,
+        "revenue_growth_pct":    revenue_growth_pct,
+        "working_capital_days":  working_capital_days,
+        "requested_amount_crore":requested_amount_crore,
+    }
+    capital_data = {
+        "debt_equity_ratio": debt_equity_ratio,
+        "current_ratio":     current_ratio,
+        "net_worth_crore":   net_worth_crore,
+    }
+    collateral_data = {
+        "collateral_coverage_ratio": collateral_coverage_ratio,
+        "title_clear":               True,
+        "collateral_type":           "property",
+    }
+    conditions_data = {
+        "sector_outlook":       sector_outlook,
+        "rbi_regulatory_flags": research_out.get("results",{}).get("rbi_circulars",{}).get("count", 0),
+        "news_sentiment":       research_out.get("news_sentiment", news_sentiment),
     }
 
-    risk_out = compute_overall_score(score_input)
+    risk_out = compute_overall_score(character_data, capacity_data, capital_data, collateral_data, conditions_data)
+
+    # Qualitative boost from officer notes
+    qualitative_boost = 0
+    if capacity_utilization_pct >= 75:
+        qualitative_boost += 3
+    if management_quality == "strong":
+        qualitative_boost += 4
+    if site_visit_positive:
+        qualitative_boost += 2
+    if qualitative_boost:
+        risk_out["scores"]["overall"] = min(100, risk_out["scores"]["overall"] + qualitative_boost)
+        risk_out["qualitative_boost"] = qualitative_boost
+        risk_out["explainability"].append(
+            ("positive", f"Qualitative assessment by Credit Officer: +{qualitative_boost} pts")
+        )
     SESSION["risk_score"] = risk_out
     progress.append(
         f"Score computed: {risk_out.get('scores',{}).get('overall',0)}/100 "        f"→ {risk_out.get('decision','?')} "        f"INR {risk_out.get('suggested_limit_crore',0)} Cr at {risk_out.get('interest_rate_pct',0)}%"
@@ -696,3 +714,5 @@ def reset_session():
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
+
+
